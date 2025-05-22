@@ -1,6 +1,7 @@
 Flask
 pyTelegramBotAPI
 psutil
+requests
 Flask
 pyTelegramBotAPI
 Werkzeug
