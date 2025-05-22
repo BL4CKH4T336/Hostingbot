@@ -1,57 +1,164 @@
 import os
-import telebot
+import time
+import requests
+from datetime import datetime, timedelta
 from flask import Flask, request
-import yt_dlp
+import telebot
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-API_TOKEN = "8142769913:AAGKzD793hjAWaYcKrmYiUJD_P-sQGdxFHw"
-WEBHOOK_URL = "https://hostingbot-dccp.onrender.com"
+# === Environment variables (Set in Render) ===
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
+DEEPAI_KEY = os.environ.get("DEEPAI_KEY")
+ADMIN_ID = int(os.environ.get("ADMIN_ID", "123456789"))  # Replace with your Telegram ID
 
-bot = telebot.TeleBot(API_TOKEN)
+# === Flask app and Bot ===
 app = Flask(__name__)
+bot = telebot.TeleBot(BOT_TOKEN)
+WEBHOOK_URL = f"/{BOT_TOKEN}"
 
+# === DeepAI API endpoints ===
+deepai_urls = {
+    "Text to Image": "https://api.deepai.org/api/text2img",
+    "Upscale Image": "https://api.deepai.org/api/torch-srgan",
+    "Colorize Image": "https://api.deepai.org/api/colorizer",
+    "Cartoon Generator": "https://api.deepai.org/api/toonify",
+    "NSFW Detection": "https://api.deepai.org/api/nsfw-detector",
+    "Text Generator": "https://api.deepai.org/api/text-generator",
+    "Style Transfer": "https://api.deepai.org/api/neural-style",
+    "BigGAN Generator": "https://api.deepai.org/api/biggan",
+    "Waifu Enhancer": "https://api.deepai.org/api/waifu2x",
+    "Image Similarity": "https://api.deepai.org/api/image-similarity"
+}
+
+# === User State & Usage Limits ===
+user_states = {}
+usage_log = {}
+
+# === Helper: Daily limit check ===
+def check_user_limit(user_id):
+    if user_id == ADMIN_ID:
+        return True
+    now = datetime.utcnow()
+    data = usage_log.get(user_id, {"count": 0, "reset": now + timedelta(days=1)})
+    if now > data["reset"]:
+        data = {"count": 0, "reset": now + timedelta(days=1)}
+    if data["count"] >= 10:
+        return False
+    data["count"] += 1
+    usage_log[user_id] = data
+    return True
+
+# === Inline Keyboard ===
+def main_menu():
+    markup = InlineKeyboardMarkup()
+    for label in deepai_urls:
+        markup.add(InlineKeyboardButton(label, callback_data=label))
+    return markup
+
+# === Start Command ===
 @bot.message_handler(commands=['start'])
 def start(message):
-    bot.reply_to(message, "Welcome! Use /search <song or video name> to find YouTube videos.")
+    bot.send_message(message.chat.id, "Welcome to DeepAI Bot! Choose a feature:", reply_markup=main_menu())
 
-@bot.message_handler(commands=['search'])
-def search(message):
-    query = message.text[8:].strip()
-    if not query:
-        bot.reply_to(message, "Please provide search keywords, e.g. /search coldplay viva la vida")
+# === Feature selection ===
+@bot.callback_query_handler(func=lambda call: True)
+def handle_buttons(call):
+    user_id = call.from_user.id
+    if not check_user_limit(user_id):
+        bot.answer_callback_query(call.id, "Limit reached. Try again tomorrow.")
+        return
+    feature = call.data
+    user_states[user_id] = feature
+
+    if feature in ["Text to Image", "Text Generator", "BigGAN Generator"]:
+        bot.send_message(user_id, f"Send the text for: {feature}")
+    elif feature in ["Style Transfer", "Image Similarity"]:
+        user_states[user_id] = {"feature": feature, "step": 1, "images": []}
+        bot.send_message(user_id, f"Send image 1 of 2 for {feature}")
+    else:
+        bot.send_message(user_id, f"Send the image for: {feature}")
+
+# === Handle messages ===
+@bot.message_handler(content_types=['text', 'photo'])
+def handle_input(message):
+    user_id = message.from_user.id
+    if user_id not in user_states:
+        return bot.reply_to(message, "Please choose a feature using /start")
+
+    state = user_states[user_id]
+    feature = state if isinstance(state, str) else state["feature"]
+
+    # Text-based APIs
+    if feature in ["Text to Image", "Text Generator", "BigGAN Generator"]:
+        if message.content_type != 'text':
+            return bot.reply_to(message, "Please send text input.")
+        payload = {'text': message.text}
+        response = requests.post(deepai_urls[feature], data=payload, headers={'api-key': DEEPAI_KEY})
+        out = response.json()
+        if 'output_url' in out:
+            bot.send_photo(user_id, out['output_url'])
+        else:
+            bot.send_message(user_id, out.get('output', 'Failed.'))
+        user_states.pop(user_id, None)
         return
 
-    ydl_opts = {'quiet': True, 'skip_download': True, 'format': 'bestaudio/best'}
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            results = ydl.extract_info(f"ytsearch5:{query}", download=False)['entries']
-    except Exception as e:
-        bot.reply_to(message, f"Error searching YouTube: {e}")
+    # 2-Image APIs
+    elif feature in ["Style Transfer", "Image Similarity"]:
+        if message.content_type != 'photo':
+            return bot.reply_to(message, "Please send an image.")
+        file_info = bot.get_file(message.photo[-1].file_id)
+        image_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_info.file_path}"
+        state["images"].append(image_url)
+        if state["step"] == 1:
+            state["step"] = 2
+            bot.send_message(user_id, "Now send image 2")
+        else:
+            files = {'image1': requests.get(state["images"][0], stream=True).raw,
+                     'image2': requests.get(state["images"][1], stream=True).raw}
+            response = requests.post(deepai_urls[feature], files=files, headers={'api-key': DEEPAI_KEY})
+            out = response.json()
+            if 'output_url' in out:
+                bot.send_photo(user_id, out['output_url'])
+            else:
+                bot.send_message(user_id, str(out))
+            user_states.pop(user_id, None)
         return
 
-    response = "Top 5 results:\n\n"
-    for i, video in enumerate(results):
-        title = video['title'][:50]
-        url = f"https://youtu.be/{video['id']}"
-        duration = video.get('duration', 0)
-        minutes = duration // 60
-        seconds = duration % 60
-        response += f"{i+1}. {title} [{minutes}:{seconds:02d}]\n{url}\n\n"
+    # Image-only APIs
+    elif message.content_type == 'photo':
+        file_info = bot.get_file(message.photo[-1].file_id)
+        image_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_info.file_path}"
+        file_data = requests.get(image_url, stream=True).raw
+        response = requests.post(deepai_urls[feature], files={'image': file_data}, headers={'api-key': DEEPAI_KEY})
+        out = response.json()
+        if 'output_url' in out:
+            bot.send_photo(user_id, out['output_url'])
+        elif 'output' in out:
+            bot.send_message(user_id, out['output'])
+        else:
+            bot.send_message(user_id, "Something went wrong.")
+        user_states.pop(user_id, None)
+        return
+    else:
+        bot.send_message(user_id, "Unsupported content.")
 
-    bot.reply_to(message, response)
-
-@app.route('/' + API_TOKEN, methods=['POST'])
+# === Flask route for webhook ===
+@app.route(f"/{BOT_TOKEN}", methods=['POST'])
 def webhook():
-    json_str = request.get_data().decode('utf-8')
-    update = telebot.types.Update.de_json(json_str)
-    bot.process_new_updates([update])
-    return 'OK', 200
+    bot.process_new_updates([telebot.types.Update.de_json(request.stream.read().decode("utf-8"))])
+    return '', 200
 
+# === Home route for Render health check ===
 @app.route('/')
-def index():
-    bot.remove_webhook()
-    bot.set_webhook(url=f"{WEBHOOK_URL}/{API_TOKEN}")
-    return "Webhook set", 200
+def home():
+    return 'DeepAI Telegram Bot is running.'
 
-if __name__ == "__main__":
-    port = int(os.environ.get('PORT', 5000))
+# === Set webhook if hosted ===
+if __name__ == '__main__':
+    port = int(os.environ.get("PORT", 5000))
+    bot.remove_webhook()
+    time.sleep(1)
+    webhook_url = os.environ.get("WEBHOOK_URL")
+    if webhook_url:
+        bot.set_webhook(url=f"{webhook_url}/{BOT_TOKEN}")
     app.run(host='0.0.0.0', port=port)
