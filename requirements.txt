@@ -1,2 +1,8 @@
 Flask
 pyTelegramBotAPI
+psutil
+Flask
+pyTelegramBotAPI
+Werkzeug
+psutil
+python-dotenv
