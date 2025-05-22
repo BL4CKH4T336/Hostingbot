@@ -35,6 +35,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# [Rest of your bot code remains exactly the same as in the previous version]
+# [Include all the handler functions and the Flask routes exactly as before]
 # User sessions to store state
 user_sessions = {}
 
