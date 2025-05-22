@@ -6,3 +6,4 @@ pyTelegramBotAPI
 Werkzeug
 psutil
 python-dotenv
+yt_dlp
