@@ -6,15 +6,15 @@ from flask import Flask, request
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-# === Environment variables (Set in Render) ===
-BOT_TOKEN = os.environ.get("BOT_TOKEN")
-DEEPAI_KEY = os.environ.get("DEEPAI_KEY")
-ADMIN_ID = int(os.environ.get("ADMIN_ID", "123456789"))  # Replace with your Telegram ID
+# === Credentials & Config ===
+BOT_TOKEN = "7893130831:AAFqjiwzUyXNQbNYuSt0rWT9Ex8J_S2qG9Y"
+DEEPAI_KEY = "36e40954-0d98-4221-bcae-109ccfe95e2c"
+ADMIN_ID = 6521162324  # Your Telegram ID
+WEBHOOK_URL = "https://hostingbot-dcn4.onrender.com"
 
 # === Flask app and Bot ===
 app = Flask(__name__)
 bot = telebot.TeleBot(BOT_TOKEN)
-WEBHOOK_URL = f"/{BOT_TOKEN}"
 
 # === DeepAI API endpoints ===
 deepai_urls = {
@@ -145,7 +145,9 @@ def handle_input(message):
 # === Flask route for webhook ===
 @app.route(f"/{BOT_TOKEN}", methods=['POST'])
 def webhook():
-    bot.process_new_updates([telebot.types.Update.de_json(request.stream.read().decode("utf-8"))])
+    json_string = request.get_data().decode('utf-8')
+    update = telebot.types.Update.de_json(json_string)
+    bot.process_new_updates([update])
     return '', 200
 
 # === Home route for Render health check ===
@@ -153,12 +155,10 @@ def webhook():
 def home():
     return 'DeepAI Telegram Bot is running.'
 
-# === Set webhook if hosted ===
+# === Run & set webhook ===
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
     bot.remove_webhook()
     time.sleep(1)
-    webhook_url = os.environ.get("WEBHOOK_URL")
-    if webhook_url:
-        bot.set_webhook(url=f"{webhook_url}/{BOT_TOKEN}")
+    bot.set_webhook(url=f"{WEBHOOK_URL}/{BOT_TOKEN}")
     app.run(host='0.0.0.0', port=port)
